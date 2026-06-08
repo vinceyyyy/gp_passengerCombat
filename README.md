@@ -19,6 +19,7 @@ The script comes with a `config.lua` where you can tweak:
 
 ## Requirements
 - **Framework:** None! (100% Standalone)
+- **Library**: [ox_lib](https://github.com/overextended/ox_lib)
 - **Optional:** [ox_inventory](https://github.com/overextended/ox_inventory) (Native ammo sync is already integrated out of the box)
 
 ## Video Showcase
