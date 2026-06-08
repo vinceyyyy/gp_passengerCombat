@@ -1,14 +1,19 @@
 local WEAPON_UNARMED = `WEAPON_UNARMED`
+local combatThreadActive = false
 
-Citizen.CreateThread(function()
-    while true do
-        local sleep = 1000 
-        local playerPed = PlayerPedId()
+function startPassengerCombatThread()
+    if combatThreadActive then return end
+    combatThreadActive = true
 
-        if IsPedSittingInAnyVehicle(playerPed) then
-            local _, currentWeapon = GetCurrentPedWeapon(playerPed, true)
+    Citizen.CreateThread(function()
+        while combatThreadActive do
+            local sleep = 1000 
             
-            if currentWeapon ~= WEAPON_UNARMED then
+            local playerPed = cache.ped
+            local currentVeh = cache.vehicle
+            local currentWeapon = cache.weapon
+
+            if currentWeapon and currentWeapon ~= WEAPON_UNARMED and currentVeh then
                 local isAiming = IsControlPressed(0, 25) -- right click
                 local isBlindFiring = IsControlPressed(0, 69) -- left click
                 local canShoot = false
@@ -20,33 +25,31 @@ Citizen.CreateThread(function()
                 end
                 
                 if canShoot then
-                    local currentVeh = GetVehiclePedIsIn(playerPed, false)
+                    sleep = 5
+
                     local muzzleCoords = GetWeaponMuzzleCoords(playerPed)
                     local camRot = GetGameplayCamRot(2)
                     local direction = CameraRotationToVector(camRot)
-                    local distance = Config.MaxDistance
-                    local endCoords = muzzleCoords + (direction * distance)
+                    local endCoords = muzzleCoords + (direction * Config.MaxDistance)
                     
                     local targetFound = false
                     local targetPedToHit = 0
                     local isFirstPerson = (GetFollowVehicleCamViewMode() == 4)
     
-                    if currentVeh ~= 0 then
-                        if not Config.FirstPersonOnly or (Config.FirstPersonOnly and isFirstPerson) then
-                            local maxSeats = GetVehicleMaxNumberOfPassengers(currentVeh)
+                    if not Config.FirstPersonOnly or (Config.FirstPersonOnly and isFirstPerson) then
+                        local maxSeats = GetVehicleMaxNumberOfPassengers(currentVeh)
+                        
+                        for seat = -1, maxSeats - 1 do
+                            local targetPed = GetPedInVehicleSeat(currentVeh, seat)
                             
-                            for seat = -1, maxSeats - 1 do
-                                local targetPed = GetPedInVehicleSeat(currentVeh, seat)
-                                
-                                if targetPed ~= 0 and targetPed ~= playerPed then
-                                    local headCoords = GetPedBoneCoords(targetPed, 31086, 0.0, 0.0, 0.0) 
-                                    local distToHead = GetDistancePointToLine(headCoords, muzzleCoords, endCoords)
+                            if targetPed ~= 0 and targetPed ~= playerPed then
+                                local headCoords = GetPedBoneCoords(targetPed, 31086, 0.0, 0.0, 0.0) 
+                                local distToHead = GetDistancePointToLine(headCoords, muzzleCoords, endCoords)
     
-                                    if distToHead < Config.HeadshotRadius then
-                                        targetFound = true
-                                        targetPedToHit = targetPed
-                                        break
-                                    end
+                                if distToHead < Config.HeadshotRadius then
+                                    targetFound = true
+                                    targetPedToHit = targetPed
+                                    break
                                 end
                             end
                         end
@@ -59,43 +62,45 @@ Citizen.CreateThread(function()
                         DisableControlAction(0, 69, true)
     
                         if IsDisabledControlPressed(0, 24) or IsDisabledControlJustPressed(0, 69) then
-                            local _, currentWeapon = GetCurrentPedWeapon(playerPed, true)
-    
-                            if currentWeapon ~= GetHashKey("WEAPON_UNARMED") then
-                                local hasAmmo, ammoInClip = GetAmmoInClip(playerPed, currentWeapon)
+                            local hasAmmo, ammoInClip = GetAmmoInClip(playerPed, currentWeapon)
+                            
+                            if hasAmmo and ammoInClip > 0 then
+                                SetPedShootsAtCoord(playerPed, endCoords.x, endCoords.y, endCoords.z, true)
                                 
-                                if hasAmmo and ammoInClip > 0 then
-                                    SetPedShootsAtCoord(playerPed, endCoords.x, endCoords.y, endCoords.z, true)
-
-                                    
-                                    if GetResourceState('ox_inventory') == 'started' then
-                                        TriggerServerEvent('ox_inventory:updateWeapon', 'ammo', ammoInClip - 1)
-                                    end
-                                    
-                                    if IsPedAPlayer(targetPedToHit) then
-                                        local targetPlayerId = NetworkGetPlayerIndexFromPed(targetPedToHit)
-                                        local targetServerId = GetPlayerServerId(targetPlayerId)
-                                        TriggerServerEvent("gp_passengerCombat:hitTarget", targetServerId)
-                                    else
-                                        if GetEntityHealth(targetPedToHit) > 0 then
-                                            ApplyDamageToPed(targetPedToHit, Config.Damage, false)
-                                        end
+                                if GetResourceState('ox_inventory') == 'started' then
+                                    TriggerServerEvent('ox_inventory:updateWeapon', 'ammo', ammoInClip - 1)
+                                end
+                                
+                                if IsPedAPlayer(targetPedToHit) then
+                                    local targetPlayerId = NetworkGetPlayerIndexFromPed(targetPedToHit)
+                                    local targetServerId = GetPlayerServerId(targetPlayerId)
+                                    TriggerServerEvent("gp_passengerCombat:hitTarget", targetServerId)
+                                else
+                                    if GetEntityHealth(targetPedToHit) > 0 then
+                                        ApplyDamageToPed(targetPedToHit, Config.Damage, false)
                                     end
                                 end
                             end
                         end
                     end
                 end
-                sleep = 5
-            end
+            end 
+            Citizen.Wait(sleep) 
         end 
-        Citizen.Wait(sleep) 
-    end 
+    end)
+end
+
+lib.onCache('vehicle', function(vehicle)
+    if vehicle then
+        startPassengerCombatThread()
+    else
+        combatThreadActive = false
+    end
 end)
 
 RegisterNetEvent("gp_passengerCombat:receiveDamage")
 AddEventHandler("gp_passengerCombat:receiveDamage", function(damage)
-    local myPed = PlayerPedId()
+    local myPed = cache.ped
     
     if GetPlayerInvincible(PlayerId()) or not GetEntityCanBeDamaged(myPed) then
         return
